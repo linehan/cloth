@@ -10,7 +10,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include "cloth.h"
 
 #ifdef USE_RESTRICT
 #else
@@ -20,6 +19,32 @@
 #define LOG_PATH         "cloth.log"
 #define COMMON_LOG_TIME  "%d/%b/%Y:%H:%M:%S %z"
 #define HELP_MESSAGE     "usage: cloth <PORT> <WWW-DIRECTORY>\n"
+
+#define BUFSIZE 8096
+
+enum log_genre { OOPS=42, WARN, INFO };
+
+const char *bad_dir[]={
+        "/", "/etc", "/bin", "/lib", "/tmp", "/usr", "/dev", "/sbin", NULL
+};
+
+struct ext_t {
+        char *ext;
+        char *filetype;
+};
+
+struct ext_t extensions[]={ 
+        {"gif", "image/gif" },
+	{"jpg", "image/jpeg"}, 
+	{"jpeg","image/jpeg"},
+	{"png", "image/png" },  
+	{"zip", "image/zip" },  
+	{"gz",  "image/gz"  },  
+	{"tar", "image/tar" },  
+	{"htm", "text/html" },  
+	{"html","text/html" },  
+	{0,0} 
+};
 
 char www_path[BUFSIZE];
 char port_num[BUFSIZE];
