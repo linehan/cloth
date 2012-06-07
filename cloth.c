@@ -10,109 +10,69 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include "cloth.h"
 
-#define BUFSIZE 8096
+#ifdef USE_RESTRICT
+#else
+#define restrict
+#endif
 
-enum log_genre { ERROR=42, WARN, INFO };
+#define LOG_PATH         "cloth.log"
+#define COMMON_LOG_TIME  "%d/%b/%Y:%H:%M:%S %z"
+#define HELP_MESSAGE     "usage: cloth <PORT> <WWW-DIRECTORY>\n"
 
-const char *bad_dir[]={
-        "/", "/etc", "/bin", "/lib", "/tmp", "/usr", "/dev", "/sbin", NULL
-};
-
-struct ext_t {
-        char *ext;
-        char *filetype;
-};
-
-struct ext_t extensions[]={ 
-        {"gif", "image/gif" },
-	{"jpg", "image/jpeg"}, 
-	{"jpeg","image/jpeg"},
-	{"png", "image/png" },  
-	{"zip", "image/zip" },  
-	{"gz",  "image/gz"  },  
-	{"tar", "image/tar" },  
-	{"htm", "text/html" },  
-	{"html","text/html" },  
-	{0,0} 
-};
+char www_path[BUFSIZE];
+char log_path[BUFSIZE];
+char port_num[BUFSIZE];
 
 
 /****************************************************************************** 
  * LOGS
  * Implements the common log format and standard log time format.
  ******************************************************************************/
-#define COMMON_LOG_TIME "%d/%b/%Y:%H:%M:%S %z"
-#define LOG_PATH "cloth.log"
-
-struct logf_t {
-        char *host;
-        char *ident;
-        char *agent;
-        char *date;
-        char *request;
-        char *status;  /* Not implemented */
-        char *bytes;   /* Not implemented */
-        pid_t pid;
-};
-
-/** 
- * cruft to free() a logf_t 
- */
-inline void del_log(struct logf_t *log)
-{
-        free(log->host);
-        free(log->ident);
-        free(log->agent);
-        free(log->date);
-        free(log->request);
-        free(log->status);
-        free(log->bytes);
-}
-
 /**
- * mklog -- create a logf_t given req string, the current time, and the pid
+ * mklog -- fill a destination buffer with a properly formatted log entry 
  * @buffer: the full request string to be parsed
  * @time  : the current time from time(NULL)
  * @pid   : the process id from getpid()
  */
-struct logf_t *make_log(char *buffer, time_t time, pid_t pid)
+char *mklog(char *raw, time_t time, pid_t pid)
 {
-        static char copy[BUFSIZE*2];
+        static char copy[BUFSIZE];
         static char date[BUFSIZE];
-        struct logf_t *new;
+        static char host[BUFSIZE];
+        static char agent[BUFSIZE];
+        static char req[BUFSIZE];
         char *token;
         char *field;
+        char *dest;
 
-        new = calloc(1, sizeof(struct logf_t));
+        dest = malloc(BUFSIZE * sizeof(char)); /* This gets returned */
 
-        strcpy(copy, buffer);
+        strcpy(copy, raw);
 
-        /* 
-         * Parse the provided buffer, filling the fields in the 
-         * struct log_format
-         */
+        /* Parse the raw buffer, fishing out the important bits */
         for (token  = strtok(copy, "**"); 
              token != NULL; 
              token  = strtok(NULL, "**")) {
 
                 if (field = strstr(token, "GET"), field != NULL)
-                        new->request = strdup(field);
+                        sprintf(req, "%s", field);
 
                 if (field = strstr(token, "Host:"), field != NULL)
-                        new->host = strdup(&field[6]);
+                        sprintf(host, "%s", &field[6]);
 
                 if (field = strstr(token, "User-Agent:"), field != NULL)
-                        new->agent = strdup(&field[12]);
+                        sprintf(agent, "%s", &field[12]);
         }
 
-        /* Format and print the time string */
+        /* Print the formatted date string */
         strftime(date, BUFSIZE, COMMON_LOG_TIME, gmtime(&time));
-        new->date = strdup(date); 
 
-        new->pid = pid;
-        
-        return (new);
+        /* Print all of this into the dest buffer */
+        sprintf(dest, "%s %s [%s] \"%s\" %d -", host, agent, date, req, pid);
+
+        return dest;
 }
 
 
@@ -123,50 +83,39 @@ struct logf_t *make_log(char *buffer, time_t time, pid_t pid)
  * @s2   : message 2
  * @num  : errorno
  */
-void log(int type, char *msg, char *requester, int socket_num)
+void log(enum log_genre genre, char *msg, char *raw, int socket)
 {
-	char logbuf[BUFSIZE*2];
-        char reqbuf[BUFSIZE*2];
-        struct logf_t *log;
+	char buf[BUFSIZE*2];
+        char *log_entry;
 	int fd;
 
-        log = make_log(requester, time(NULL), getpid());
+        log_entry = mklog(raw, time(NULL), getpid());
 
-        sprintf(reqbuf, "%s %s %s %s %d %d", log->host, log->agent, 
-                                             log->date, log->request, 
-                                             log->pid,  socket_num);
-
-	switch (type) 
+	switch (genre) 
         {
-	case ERROR: 
-                sprintf(logbuf, "ERROR: %s ERRNO=%d PID=%d SOCKET:%d\n", 
-                        msg, errno, getpid(), socket_num); 
+	case OOPS: 
+                sprintf(buf, "OOPS: %s ERRNO %d", msg, errno); 
                 break;
-
 	case WARN: 
-		sprintf(logbuf, "<HTML><BODY><H1>cloth HTTP server says: %s"
-                                "</H1></BODY></HTML>\r\n", msg);
-		write(socket_num, logbuf, strlen(logbuf));
-		sprintf(logbuf, "WARN: %s %% %s\n", msg, reqbuf); 
+		sprintf(buf, "<html><body>cloth: %s</body></html>\r", msg);
+		write(socket, buf, strlen(buf));
+		sprintf(buf, "WARN: %s %s", msg, log_entry); 
 		break;
-
 	case INFO: 
-                sprintf(logbuf, "INFO: %s %% %s\n", msg, reqbuf);
+                sprintf(buf, "INFO: %s %s", msg, log_entry);
                 break;
 	}	
         
         /* Write the log buffer to the log file */
 	if ((fd = open(LOG_PATH, O_CREAT| O_WRONLY | O_APPEND, 0644)) >= 0) {
-		write(fd, logbuf, strlen(logbuf)); 
+		write(fd, buf, strlen(buf)); 
 		write(fd, "\n", 1);      
 		close(fd);
 	}
 
-        /* Clean up the formatted log struct */
-        del_log(log);
-        free(log);
+        free(log_entry);
 
-	if (type == ERROR || type == WARN) 
+	if (genre == OOPS || genre == WARN) 
                 exit(3);
 }
         
@@ -176,14 +125,32 @@ void log(int type, char *msg, char *requester, int socket_num)
  * The main function called by the child process when a request is made
  * on the socket being listened to by the server.
  ******************************************************************************/
+/** 
+ * Work out the file type and check we support it 
+ */
+inline char *get_file_extension(char *buf, size_t buflen)
+{
+        size_t len;
+        int i;
+
+	for (i=0; extensions[i].ext != NULL; i++) {
+		len = strlen(extensions[i].ext);
+		if (!strncmp(&buf[buflen-len], extensions[i].ext, len)) {
+			return extensions[i].filetype;
+		}
+	}
+        return NULL;
+}
+
+
 /**
  * web -- child web process that gets forked (so we can exit on error)
  * @fd : socket file descriptor 
- * @hit: ???
+ * @hit: request count 
  */
 void web(int fd, int hit)
 {
-	static char buffer[BUFSIZE+1]; /* static so zero filled */
+	static char buffer[BUFSIZE];
         int file_fd;
         int buflen;
 	char *fstr;
@@ -212,7 +179,7 @@ void web(int fd, int hit)
 
         /* Only the GET operation is allowed */
 	if (strncmp(buffer, "GET ", 4) && strncmp(buffer, "get ", 4))
-		log(WARN, "Only simple GET operation supported", buffer, fd);
+		log(WARN, "Only GET operation supported", buffer, fd);
 
         /* 
          * NUL-terminate after the second space of the request. We don't
@@ -230,8 +197,7 @@ void web(int fd, int hit)
                 log(WARN, "Relative pathnames not supported", buffer, fd);
 
         /* In the absence of an explicit filename, default to index.html */
-        if (!strncmp(buffer, "GET /\0", 6) 
-        ||  !strncmp(buffer, "get /\0", 6))
+        if (!strncmp(buffer, "GET /\0", 6) || !strncmp(buffer, "get /\0", 6))
 		strcpy(buffer, "GET /index.html");
 
         /* Changed after truncation and/or appending */
@@ -275,53 +241,53 @@ void web(int fd, int hit)
  * and then proceeds to listen on it for requests. It will serve the file
  * parameter given at program start if a valid request is received.
  ******************************************************************************/
-/** 
- * Work out the file type and check we support it 
- */
-inline char *get_file_extension(char *buf, size_t buflen)
-{
-        size_t len;
-        int i;
-
-	for (i=0; extensions[i].ext != NULL; i++) {
-		len = strlen(extensions[i].ext);
-		if (!strncmp(&buf[buflen-len], extensions[i].ext, len)) {
-			return extensions[i].filetype;
-		}
-	}
-        return NULL;
-}
-
-
 /**
  * main -- start the server, check the args, and fork into the background 
  */
 int main(int argc, char **argv)
 {
-        #define MAX_PORT 60000
-	static struct sockaddr_in cli_addr; 
-	static struct sockaddr_in serv_addr;
+        #define DEFAULT_PORT 55555
+        #define MAX_PORT     60000
+	static struct sockaddr_in client_addr; 
+	static struct sockaddr_in server_addr;
 	int i, port, pid, listenfd, socketfd, hit;
-	size_t length;
+	socklen_t length;
+        int ch;
+
+        port = DEFAULT_PORT; 
 
         /* Check that all required arguments have been supplied */
-	if (argc < 3 || argc > 3 || !strcmp(argv[1], "-?")) {
-	        printf("usage: cloth <PORT> <WWW-DIRECTORY>\n\n"
-	               "\tcloth is a miniscule HTTP server.\n");
-		exit(0);
-	}
+        while ((ch = getopt(argc, argv, "p:d:l:?")) != -1) {
+                switch (ch) {
+                case 'p':
+                        port = atoi(optarg);
+                        break;
+                case 'd':
+                        sprintf(www_path, "%s", optarg);
+                        break;
+                case 'l':
+                        sprintf(log_path, "%s", optarg);
+                        break;
+                case '?':
+                        printf("%s", HELP_MESSAGE);
+                        exit(1);
+                default:
+                        printf("%s", HELP_MESSAGE);
+                        exit(1);
+                }
+        }
 
-        /* Check that top-directory is legal */
+        /* Check that www directory is legal */
         for (i=0; bad_dir[i] != NULL; i++) {
-                if (!strncmp(argv[2], bad_dir[i], strlen(bad_dir[i])+1)) {
-		        printf("ERROR: Bad top directory %s\n", argv[2]);
+                if (!strncmp(www_path, bad_dir[i], strlen(bad_dir[i])+1)) {
+		        printf("ERROR: Bad www directory %s\n", www_path);
 		        exit(3);
                 }
         }
 
         /* Check that directory exists */
-	if (chdir(argv[2]) == -1) { 
-		printf("ERROR: Can't change to directory %s\n", argv[2]);
+	if (chdir(www_path) == -1) { 
+		printf("ERROR: Can't change to directory %s\n", www_path);
 		exit(4);
 	}
 
@@ -342,40 +308,39 @@ int main(int argc, char **argv)
         }
 	setpgrp(); /* break away from process group */
 
-	log(INFO, "cloth is starting up...", argv[1], getpid());
+	log(INFO, "cloth is starting up...", "", getpid());
 
 	/* Initialize the network socket */
 	if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-		log(ERROR, "system call", "socket", 0);
+		log(OOPS, "system call", "socket", 0);
 
         /* Ensure that the port number is legal */
-	port = atoi(argv[1]);
 	if (port < 0 || port > MAX_PORT)
-		log(ERROR, "Invalid port number (try 1->60000)", argv[1], 0);
+		log(OOPS, "Invalid port number (> 60000)", "", 0);
 
         /* Fill out the socket address struct */
-	serv_addr.sin_family      = AF_INET;
-	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	serv_addr.sin_port        = htons(port);
+	server_addr.sin_family      = AF_INET;
+	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	server_addr.sin_port        = htons(port);
 
         /* Attempt to bind address to socket */
-	if (bind(listenfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
-		log(ERROR, "system call", "bind", 0);
+	if (bind(listenfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+		log(OOPS, "system call", "bind", 0);
 
         /* Attempt to listen on socket */
 	if (listen(listenfd, 64) < 0)
-		log(ERROR, "system call", "listen", 0);
+		log(OOPS, "system call", "listen", 0);
 
 	for (hit=1; ; hit++) {
-		length = sizeof(cli_addr);
+		length = sizeof(client_addr);
 
                 /* Attempt to accept on socket */
-		if ((socketfd = accept(listenfd, (struct sockaddr *)&cli_addr, &length)) < 0)
-			log(ERROR, "system call", "accept", 0);
+		if ((socketfd = accept(listenfd, (struct sockaddr *)&client_addr, &length)) < 0)
+			log(OOPS, "system call", "accept", 0);
 
                 /* Fork a new process to handle the request */
 		if ((pid = fork()) < 0)
-			log(ERROR, "system call", "fork", 0);
+			log(OOPS, "system call", "fork", 0);
 
                 /* 
                  * If I am the child process, fork() will return 0, and
