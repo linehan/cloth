@@ -176,24 +176,6 @@ void log(int type, char *msg, char *requester, int socket_num)
  * The main function called by the child process when a request is made
  * on the socket being listened to by the server.
  ******************************************************************************/
-/** 
- * Work out the file type and check we support it 
- */
-inline char *get_file_extension(char *buf, size_t buflen)
-{
-        size_t len;
-        int i;
-
-	for (i=0; extensions[i].ext != NULL; i++) {
-		len = strlen(extensions[i].ext);
-		if (!strncmp(&buf[buflen-len], extensions[i].ext, len)) {
-			return extensions[i].filetype;
-		}
-	}
-        return NULL;
-}
-
-
 /**
  * web -- child web process that gets forked (so we can exit on error)
  * @fd : socket file descriptor 
@@ -293,6 +275,24 @@ void web(int fd, int hit)
  * and then proceeds to listen on it for requests. It will serve the file
  * parameter given at program start if a valid request is received.
  ******************************************************************************/
+/** 
+ * Work out the file type and check we support it 
+ */
+inline char *get_file_extension(char *buf, size_t buflen)
+{
+        size_t len;
+        int i;
+
+	for (i=0; extensions[i].ext != NULL; i++) {
+		len = strlen(extensions[i].ext);
+		if (!strncmp(&buf[buflen-len], extensions[i].ext, len)) {
+			return extensions[i].filetype;
+		}
+	}
+        return NULL;
+}
+
+
 /**
  * main -- start the server, check the args, and fork into the background 
  */
@@ -321,7 +321,7 @@ int main(int argc, char **argv)
 
         /* Check that directory exists */
 	if (chdir(argv[2]) == -1) { 
-		printf("ERROR: Can't Change to directory %s\n", argv[2]);
+		printf("ERROR: Can't change to directory %s\n", argv[2]);
 		exit(4);
 	}
 
