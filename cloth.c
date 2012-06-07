@@ -22,9 +22,7 @@
 #define HELP_MESSAGE     "usage: cloth <PORT> <WWW-DIRECTORY>\n"
 
 char www_path[BUFSIZE];
-char log_path[BUFSIZE];
 char port_num[BUFSIZE];
-
 
 /****************************************************************************** 
  * LOGS
@@ -257,16 +255,13 @@ int main(int argc, char **argv)
         port = DEFAULT_PORT; 
 
         /* Check that all required arguments have been supplied */
-        while ((ch = getopt(argc, argv, "p:d:l:?")) != -1) {
+        while ((ch = getopt(argc, argv, "p:d:?")) != -1) {
                 switch (ch) {
                 case 'p':
                         port = atoi(optarg);
                         break;
                 case 'd':
                         sprintf(www_path, "%s", optarg);
-                        break;
-                case 'l':
-                        sprintf(log_path, "%s", optarg);
                         break;
                 case '?':
                         printf("%s", HELP_MESSAGE);
