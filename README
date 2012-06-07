@@ -3,7 +3,7 @@ so that it can be read and understood in one sitting.
 
 To use it, run
 
-        ./cloth <PORT> <WWW_ROOT> &
+        ./cloth -p <PORT> -d <WWW_ROOT> &
         
 (the '&' forks the process into the background in most shells)
 
