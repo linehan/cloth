@@ -119,8 +119,8 @@ void log(enum log_genre genre, char *msg, char *raw, int socket)
         
 
 /****************************************************************************** 
- * WEB 
- * The main function called by the child process when a request is made
+ * HTTP 
+ * The main functions called by the child process when a request is made
  * on the socket being listened to by the server.
  ******************************************************************************/
 /** 
@@ -146,90 +146,175 @@ inline char *get_file_extension(char *buf, size_t buflen)
  * @fd : socket file descriptor 
  * @hit: request count 
  */
-void web(int fd, int hit)
+void web(int fd_socket, int hit)
 {
 	static char buffer[BUFSIZE];
-        int file_fd;
-        int buflen;
+        char *buf;
+        int fd_file;
 	char *fstr;
         long ret;
-	long i;
 
-        /* Read a web request, filling 'buffer' with the data at 'fd' */
-	if (ret = read(fd, buffer, BUFSIZE), ret == 0 || ret == -1)
-		log(WARN, "failed to read browser request", "", fd);
+        /********************************************** 
+         * Receive a new request                      *
+         **********************************************/
+        /* 
+         * Read the request from the socket into the buffer 
+         */
+	if (ret = read(fd_socket, buffer, BUFSIZE), ret <= 0 || ret >= BUFSIZE)
+		log(WARN, "failed to read browser request", "", fd_socket);
 
-        /* Terminate the buffer if the return code is a valid length. */
-	if (ret > 0 && ret < BUFSIZE)
-		buffer[ret] = '\0';
-	else 
-                buffer[0] = '\0';
+        /* 
+         * Nul-terminate the buffer. 
+         */
+	buffer[ret] = '\0'; 
 
-	buflen = strlen(buffer);
-
-        /* Scan the buffer and remove any carriage returns or newlines */
-	for (i=0; i<buflen; i++) {
-		if (buffer[i] == '\r' || buffer[i] == '\n') 
-                        buffer[i] = '*';
+        /* 
+         * Replace CR and/or NL with '*' delimiter 
+         */
+	for (buf = buffer; *buf; buf++) {
+		if (*buf=='\r' || *buf=='\n') 
+                        *buf = '*';
         }
 
 	log(INFO, "request", buffer, hit);
 
-        /* Only the GET operation is allowed */
+
+        /********************************************** 
+         * Verify that the request is legal           *
+         **********************************************/
+        /* 
+         * Only the GET operation is allowed 
+         */
 	if (strncmp(buffer, "GET ", 4) && strncmp(buffer, "get ", 4))
-		log(WARN, "Only GET operation supported", buffer, fd);
+		log(WARN, "Only GET operation supported", buffer, fd_socket);
 
         /* 
-         * NUL-terminate after the second space of the request. We don't
-         * care about the extra stuff after the filename being requested.
+         * Truncate the request after the filename being requested 
          */
-        for (i=4; i<BUFSIZE; i++) {
-                if (buffer[i] == ' ') { 
-                        buffer[i] = '\0';
-                        break;
-                }
+        for (buf=&buffer[4]; *buf; buf++) {
+                if (*buf == ' ') {*buf = '\0'; break;};
         }
 
-        /* Catch any illegal relative pathnames (..) */
+        /* 
+         * Catch any illegal relative pathnames (..) 
+         */
         if (strstr(buffer, ".."))
-                log(WARN, "Relative pathnames not supported", buffer, fd);
+                log(WARN, "Relative paths not supported", buffer, fd_socket);
 
-        /* In the absence of an explicit filename, default to index.html */
+        /* 
+         * In the absence of an explicit filename, default to index.html 
+         */
         if (!strncmp(buffer, "GET /\0", 6) || !strncmp(buffer, "get /\0", 6))
 		strcpy(buffer, "GET /index.html");
 
-        /* Changed after truncation and/or appending */
-        buflen = strlen(buffer); 
+        /* 
+         * Scan for filename extensions and check against valid ones. 
+         */
+        if (fstr = get_file_extension(buffer, strlen(buffer)), fstr == NULL)
+                log(WARN, "file extension not supported", buffer, fd_socket);
 
-        /* Scan for filename extensions and check against valid ones. */
-        if (fstr = get_file_extension(buffer, buflen), fstr == NULL)
-                log(WARN, "file extension type not supported", buffer, fd);
-
-        /* Open the file for reading */
-	if ((file_fd = open(&buffer[5], O_RDONLY)) == -1)
-		log(WARN, "failed to open file", &buffer[5], fd);
+        /* 
+         * Open the requested file 
+         */
+	if ((fd_file = open(&buffer[5], O_RDONLY)) == -1)
+		log(WARN, "failed to open file", &buffer[5], fd_socket);
 
 	log(INFO, "SEND", &buffer[5], hit);
 
+
+        /********************************************** 
+         * Write the HTTP response to the socket      *
+         **********************************************/
         /* 
          * Format and print the HTTP response to the buffer, then write the 
          * buffer contents to the socket.
          */ 
 	sprintf(buffer, "HTTP/1.0 200 OK\r\nContent-Type: %s\r\n\r\n", fstr);
-	write(fd, buffer, strlen(buffer));
+	write(fd_socket, buffer, strlen(buffer));
 
 	/* 
          * Write the file to the socket in blocks of 8KB (last block may 
          * be smaller) 
          */
-	while ((ret = read(file_fd, buffer, BUFSIZE)) > 0) {
-		write(fd, buffer, ret);
+	while ((ret = read(fd_file, buffer, BUFSIZE)) > 0) {
+		write(fd_socket, buffer, ret);
 	}
 
         #ifdef LINUX
 	sleep(1);	/* to allow socket to drain */
         #endif
 	exit(1);
+}
+
+
+/**
+ * cloth -- the main loop that establishes a socket and listens for requests
+ * @www : the www directory to serve files from
+ * @port: the port number
+ */
+void cloth(int port)
+{
+	static struct sockaddr_in client_addr; 
+	static struct sockaddr_in server_addr;
+	socklen_t length;
+        int fd_socket;
+        int fd_listen;
+        int hit;
+        int pid;
+
+        /********************************************** 
+         * Prepare the process to run as a daemon     *
+         **********************************************/
+	signal(SIGCLD, SIG_IGN); /* Ignore child death */
+	signal(SIGHUP, SIG_IGN); /* Ignore terminal hangups */
+	setpgrp();               /* Break away from process group */
+
+	log(INFO, "cloth is starting up...", "", getpid());
+
+
+        /**********************************************
+         * Establish the server side of the socket    *
+         **********************************************/
+	server_addr.sin_family      = AF_INET;
+	server_addr.sin_port        = htons(port);
+	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	/* Initialize the socket */
+	if ((fd_listen = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+		log(OOPS, "system call", "socket", 0);
+
+        /* Attempt to bind the server's address to the socket */
+	if (bind(fd_listen, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+		log(OOPS, "system call", "bind", 0);
+
+        /* Attempt to listen on the socket */
+	if (listen(fd_listen, 64) < 0)
+		log(OOPS, "system call", "listen", 0);
+
+
+        /**********************************************
+         * Loop forever, listening on the socket      *
+         **********************************************/
+	for (hit=1; ; hit++) {
+		length = sizeof(client_addr);
+
+                /* Attempt to accept on socket */
+		if ((fd_socket = accept(fd_listen, (struct sockaddr *)&client_addr, &length)) < 0)
+			log(OOPS, "system call", "accept", 0);
+
+                /* Fork a new process to handle the request */
+		if ((pid = fork()) < 0)
+			log(OOPS, "system call", "fork", 0);
+
+                /* Child */
+                if (pid == 0) {
+                        close(fd_listen);
+                        web(fd_socket, hit); /* never returns */
+                /* Parent */
+                } else { 
+                        close(fd_socket);
+                }
+	}
 }
 
 
@@ -246,11 +331,9 @@ int main(int argc, char **argv)
 {
         #define DEFAULT_PORT 55555
         #define MAX_PORT     60000
-	static struct sockaddr_in client_addr; 
-	static struct sockaddr_in server_addr;
-	int i, port, pid, listenfd, socketfd, hit;
-	socklen_t length;
+        int port;
         int ch;
+        int i;
 
         port = DEFAULT_PORT; 
 
@@ -280,75 +363,25 @@ int main(int argc, char **argv)
                 }
         }
 
-        /* Check that directory exists */
+        /* Change working directory to the one provided by the caller */
 	if (chdir(www_path) == -1) { 
 		printf("ERROR: Can't change to directory %s\n", www_path);
 		exit(4);
 	}
 
-	/* 
-         * Daemonize the process and instantly return OK to the
-         * shell. The child is on its own, we aren't going to wait()
-         * around for it.  
-         */
-	if (fork() != 0)
-		return 0; 
-
-	signal(SIGCLD, SIG_IGN); /* ignore child death */
-	signal(SIGHUP, SIG_IGN); /* ignore terminal hangups */
-
-        /* Close all open files */
-	for (i=0; i<32; i++) {
-		close(i);
-        }
-	setpgrp(); /* break away from process group */
-
-	log(INFO, "cloth is starting up...", "", getpid());
-
-	/* Initialize the network socket */
-	if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-		log(OOPS, "system call", "socket", 0);
-
         /* Ensure that the port number is legal */
-	if (port < 0 || port > MAX_PORT)
-		log(OOPS, "Invalid port number (> 60000)", "", 0);
+	if (port < 0 || port > MAX_PORT) {
+		printf("ERROR: Invalid port number %d (> 60000)", port);
+                exit(3);
+        }
 
-        /* Fill out the socket address struct */
-	server_addr.sin_family      = AF_INET;
-	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	server_addr.sin_port        = htons(port);
+	/* 
+         * Fork the process. The child will enter cloth() and be daemonized
+         * while the parent returns 0 to the shell. 
+         */
+	if (fork() == 0)
+                cloth(port);
 
-        /* Attempt to bind address to socket */
-	if (bind(listenfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-		log(OOPS, "system call", "bind", 0);
-
-        /* Attempt to listen on socket */
-	if (listen(listenfd, 64) < 0)
-		log(OOPS, "system call", "listen", 0);
-
-	for (hit=1; ; hit++) {
-		length = sizeof(client_addr);
-
-                /* Attempt to accept on socket */
-		if ((socketfd = accept(listenfd, (struct sockaddr *)&client_addr, &length)) < 0)
-			log(OOPS, "system call", "accept", 0);
-
-                /* Fork a new process to handle the request */
-		if ((pid = fork()) < 0)
-			log(OOPS, "system call", "fork", 0);
-
-                /* 
-                 * If I am the child process, fork() will return 0, and
-                 * I can move into web() and handle the HTTP request.
-                 * Otherwise, I am the parent, and I should close the socket
-                 * I received the request on. 
-                 */
-                if (pid == 0) {
-                        close(listenfd);
-                        web(socketfd, hit); /* never returns */
-                } else { 
-                        close(socketfd);
-                }
-	}
+        return 0;
 }
 
