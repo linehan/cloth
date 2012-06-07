@@ -1,0 +1,18 @@
+cloth is a toy web server designed to be as small as possible,
+so that it can be read and understood in one sitting.
+
+To use it, run
+
+        ./cloth <PORT> <WWW_ROOT> &
+        
+where the '&' forks the process into the background in most
+shells. To stop it, try 
+
+        pkill cloth
+
+If you don't have any content or just want to test it out, 
+try providing the included www folder as a the WWW_ROOT path.
+
+NOTE: the command line arguments must NOT be relative paths,
+      i.e., no '~/foo' or '../../baz'
+
