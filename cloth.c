@@ -11,29 +11,44 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+/*
+ * accept() makes use of the restrict keyword 
+ * introduced in C99. 
+ */
 #ifdef USE_RESTRICT
 #else
 #define restrict
 #endif
 
-#define LOG_PATH         "cloth.log"
-#define COMMON_LOG_TIME  "%d/%b/%Y:%H:%M:%S %z"
-#define HELP_MESSAGE     "usage: cloth <PORT> <WWW-DIRECTORY>\n"
 
+/* For static buffers */
 #define BUFSIZE 8096
-
+/* Default path of the log file (relative to -d) */
+#define LOG_PATH "cloth.log"
+/* The strftime() format string for common log time. */
+#define COMMON_LOG_TIME "%d/%b/%Y:%H:%M:%S %z"
+/* Message printed on illegal argument usage. */
+#define HELP_MESSAGE "usage: cloth <PORT> <WWW-DIRECTORY>\n"
+/* Type of message to be printed in the log. */ 
 enum log_genre { OOPS=42, WARN, INFO };
 
-const char *bad_dir[]={
-        "/", "/etc", "/bin", "/lib", "/tmp", "/usr", "/dev", "/sbin", NULL
-};
 
-struct ext_t {
-        char *ext;
-        char *filetype;
-};
+/*
+ * Non-allowed directories. The program will abort with 
+ * an error message if any of these are passed as an 
+ * argument to the -d flag.
+ */
+static const 
+char *bad_dir[]={"/","/etc","/bin","/lib","/tmp","/usr","/dev","/sbin",NULL};
 
-struct ext_t extensions[]={ 
+
+/*
+ * Supported filetypes and extensions. If an HTTP 
+ * request asks for anything not on this list, the 
+ * request will be greeted with an error message.
+ */
+struct ext_t { char *ext; char *filetype; };
+struct ext_t supported_ext[]={ 
         {"gif", "image/gif" },
 	{"jpg", "image/jpeg"}, 
 	{"jpeg","image/jpeg"},
@@ -46,8 +61,14 @@ struct ext_t extensions[]={
 	{0,0} 
 };
 
+
+/*
+ * Buffers to store arguments to -d and -p parameters. 
+ */
 char www_path[BUFSIZE];
 char port_num[BUFSIZE];
+
+
 
 /****************************************************************************** 
  * LOGS
@@ -156,10 +177,10 @@ inline char *get_file_extension(char *buf, size_t buflen)
         size_t len;
         int i;
 
-	for (i=0; extensions[i].ext != NULL; i++) {
-		len = strlen(extensions[i].ext);
-		if (!strncmp(&buf[buflen-len], extensions[i].ext, len)) {
-			return extensions[i].filetype;
+	for (i=0; supported_ext[i].ext != NULL; i++) {
+		len = strlen(supported_ext[i].ext);
+		if (!strncmp(&buf[buflen-len], supported_ext[i].ext, len)) {
+			return supported_ext[i].filetype;
 		}
 	}
         return NULL;
@@ -182,20 +203,14 @@ void web(int fd_socket, int hit)
         /********************************************** 
          * Receive a new request                      *
          **********************************************/
-        /* 
-         * Read the request from the socket into the buffer 
-         */
+        /* Read the request from the socket into the buffer */
 	if (ret = read(fd_socket, buffer, BUFSIZE), ret <= 0 || ret >= BUFSIZE)
 		log(WARN, "failed to read browser request", "", fd_socket);
 
-        /* 
-         * Nul-terminate the buffer. 
-         */
+        /* Nul-terminate the buffer. */
 	buffer[ret] = '\0'; 
 
-        /* 
-         * Replace CR and/or NL with '*' delimiter 
-         */
+        /* Replace CR and/or NL with '*' delimiter */
 	for (buf = buffer; *buf; buf++) {
 		if (*buf=='\r' || *buf=='\n') 
                         *buf = '*';
@@ -207,40 +222,28 @@ void web(int fd_socket, int hit)
         /********************************************** 
          * Verify that the request is legal           *
          **********************************************/
-        /* 
-         * Only the GET operation is allowed 
-         */
+        /* Only the GET operation is allowed */
 	if (strncmp(buffer, "GET ", 4) && strncmp(buffer, "get ", 4))
 		log(WARN, "Only GET operation supported", buffer, fd_socket);
 
-        /* 
-         * Truncate the request after the filename being requested 
-         */
+        /* Truncate the request after the filename being requested */
         for (buf=&buffer[4]; *buf; buf++) {
                 if (*buf == ' ') {*buf = '\0'; break;};
         }
 
-        /* 
-         * Catch any illegal relative pathnames (..) 
-         */
+        /* Catch any illegal relative pathnames (..) */
         if (strstr(buffer, ".."))
                 log(WARN, "Relative paths not supported", buffer, fd_socket);
 
-        /* 
-         * In the absence of an explicit filename, default to index.html 
-         */
+        /* In the absence of an explicit filename, default to index.html */
         if (!strncmp(buffer, "GET /\0", 6) || !strncmp(buffer, "get /\0", 6))
 		strcpy(buffer, "GET /index.html");
 
-        /* 
-         * Scan for filename extensions and check against valid ones. 
-         */
+        /* Scan for filename extensions and check against valid ones. */
         if (fstr = get_file_extension(buffer, strlen(buffer)), fstr == NULL)
                 log(WARN, "file extension not supported", buffer, fd_socket);
 
-        /* 
-         * Open the requested file 
-         */
+        /* Open the requested file */
 	if ((fd_file = open(&buffer[5], O_RDONLY)) == -1)
 		log(WARN, "failed to open file", &buffer[5], fd_socket);
 
