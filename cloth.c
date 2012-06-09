@@ -58,6 +58,7 @@ struct ext_t supported_ext[]={
 	{"tar", "image/tar" },  
 	{"htm", "text/html" },  
 	{"html","text/html" },  
+	{"css", "text/css"  },  
 	{0,0} 
 };
 
