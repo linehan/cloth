@@ -142,7 +142,7 @@ void log(enum log_genre genre, char *msg, char *raw, int socket)
                 sprintf(buf, "OOPS: %s ERRNO %d", msg, errno); 
                 break;
 	case WARN: 
-		sprintf(buf, "<html><body>cloth: %s</body></html>\r", msg);
+		sprintf(buf, "cloth says: %s\r", msg);
 		write(socket, buf, strlen(buf));
 		sprintf(buf, "WARN: %s %s", msg, log_entry); 
 		break;
