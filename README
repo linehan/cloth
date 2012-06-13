@@ -5,7 +5,7 @@ To use it, run
 
         ./cloth -p <PORT> -d <WWW_ROOT> &
         
-(the '&' forks the process into the background in most shells)
+('&' forks the process into the background in most shells)
 
 To stop it, try 
 

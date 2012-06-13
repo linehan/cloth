@@ -64,11 +64,8 @@ struct ext_t supported_ext[]={
 };
 
 
-/*
- * Buffers to store arguments to -d and -p parameters. 
- */
+/* Buffer to store argument to -d parameter. */
 char www_path[BUFSIZE];
-char port_num[BUFSIZE];
 
 
 
