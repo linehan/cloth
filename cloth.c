@@ -8,6 +8,7 @@
 #include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/param.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -290,13 +291,19 @@ void cloth(int port)
         int fd_listen;
         int hit;
         int pid;
+        int i;
 
         /********************************************** 
          * Prepare the process to run as a daemon     *
          **********************************************/
+        for (i=0; i<NOFILE; i++) /* Close files inherited from parent */
+                close(i);
+
+        umask(0);                /* Reset file access creation mask */
 	signal(SIGCLD, SIG_IGN); /* Ignore child death */
 	signal(SIGHUP, SIG_IGN); /* Ignore terminal hangups */
-	setpgrp();               /* Break away from process group */
+	setpgrp();               /* Create new process group */
+
 
 	log(INFO, "cloth is starting up...", "", getpid());
 
