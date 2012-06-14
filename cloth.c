@@ -171,13 +171,15 @@ void procinfo(pid_t pid, int socket, int hit, struct sockaddr_in *client)
 {
         char buf[BUFSIZE];
         char *ip;
-        int port;
+        short port;
         int fd;
 
-        ip = inet_ntoa(client->sin_addr);
-        port = (int)client->sin_port;
+        /* Convert the client address to a char string */
+        ip   = inet_ntoa(client->sin_addr);
+        /* Convert the port number to a short */
+        port = ntohs(client->sin_port);
 
-        sprintf(buf, "%d:%d:%d:%s:%d", pid, socket, hit, ip, port);
+        sprintf(buf, "%d:%d:%d:%s:%hd", pid, socket, hit, ip, port);
 
         /* Write the procinfo to the log file */
 	if ((fd = open(INFO_PATH, O_CREAT| O_WRONLY | O_APPEND, 0644)) >= 0) {
