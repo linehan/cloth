@@ -26,6 +26,8 @@
 #define BUFSIZE 8096
 /* Default path of the log file (relative to -d) */
 #define LOG_PATH "cloth.log"
+/* Default path of procinfo file (relative to -d) */
+#define INFO_PATH "cloth.info"
 /* The strftime() format string for common log time. */
 #define COMMON_LOG_TIME "%d/%b/%Y:%H:%M:%S %z"
 /* Message printed on illegal argument usage. */
@@ -160,6 +162,29 @@ void log(enum log_genre genre, char *msg, char *raw, int socket)
 
 	if (genre == OOPS || genre == WARN) 
                 exit(3);
+}
+
+/**
+ * procinfo -- record the process information so it can be read by watcher
+ */
+void procinfo(pid_t pid, int socket, int hit, struct sockaddr_in *client)
+{
+        char buf[BUFSIZE];
+        char *ip;
+        int port;
+        int fd;
+
+        ip = inet_ntoa(client->sin_addr);
+        port = (int)client->sin_port;
+
+        sprintf(buf, "%d:%d:%d:%s:%d", pid, socket, hit, ip, port);
+
+        /* Write the procinfo to the log file */
+	if ((fd = open(INFO_PATH, O_CREAT| O_WRONLY | O_APPEND, 0644)) >= 0) {
+		write(fd, buf, strlen(buf)); 
+		write(fd, "\n", 1);      
+		close(fd);
+	}
 }
         
 
@@ -305,6 +330,7 @@ void cloth(int port)
 	log(INFO, "cloth is starting up...", "", getpid());
 
 
+
         /**********************************************
          * Establish the server side of the socket    *
          **********************************************/
@@ -347,6 +373,7 @@ void cloth(int port)
                 } else { 
                         close(fd_socket);
                 }
+                procinfo(pid, fd_socket, hit, &client_addr); 
 	}
 }
 
