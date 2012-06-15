@@ -171,7 +171,7 @@ void procinfo(pid_t pid, int socket, int hit, struct sockaddr_in *client)
 {
         char buf[BUFSIZE];
         char *ip;
-        short port;
+        uint16_t port;
         int fd;
         time_t t;
 
@@ -184,7 +184,7 @@ void procinfo(pid_t pid, int socket, int hit, struct sockaddr_in *client)
         
         /*getnameinfo(client, sizeof(*client), host, hostlen, serv, servlen, 0);*/
 
-        sprintf(buf, "%lld:%d:%d:%d:%s:%hd", (long long)t, pid, socket, hit, ip, port);
+        sprintf(buf, "%lld:%d:%d:%d:%s:%hu", (long long)t, pid, socket, hit, ip, port);
 
         /* Write the procinfo to the log file */
 	if ((fd = open(INFO_PATH, O_CREAT| O_WRONLY | O_APPEND, 0644)) >= 0) {
