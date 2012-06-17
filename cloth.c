@@ -11,6 +11,8 @@
 #include <sys/param.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include "textutils.h"
+#include "http_status.h"
 
 /*
  * accept() makes use of the restrict keyword 
@@ -24,16 +26,19 @@
 
 /* For static buffers */
 #define BUFSIZE 8096
+#define LOGBUF 256
 /* Default path of the log file (relative to -d) */
 #define LOG_PATH "cloth.log"
 /* Default path of procinfo file (relative to -d) */
 #define INFO_PATH "cloth.info"
 /* The strftime() format string for common log time. */
 #define COMMON_LOG_TIME "%d/%b/%Y:%H:%M:%S %z"
+
 /* Message printed on illegal argument usage. */
 #define HELP_MESSAGE "usage: cloth <PORT> <WWW-DIRECTORY>\n"
 /* Type of message to be printed in the log. */ 
-enum log_genre { OOPS=42, WARN, INFO };
+/*enum log_genre { OOPS=42, WARN, INFO };*/
+
 
 
 /*
@@ -76,78 +81,208 @@ char www_path[BUFSIZE];
  * Implements the common log format and standard log time format.
  ******************************************************************************/
 /**
- * mklog -- fill a destination buffer with a properly formatted log entry 
- * @buffer: the full request string to be parsed
- * @time  : the current time from time(NULL)
- * @pid   : the process id from getpid()
+ * A log entry consists of the 7-tuple 
+ *
+ *      { code, file, local-addr, action, remote-addr, time, message } 
+ *
+ * code: the type of log entry, one of
+ *      START - the server is starting up
+ *      STOP  - the server is shutting down
+ *      INFO  - standard entry which indicates an action
+ *      WARN  - an action has failed
+ *      OUCH  - an unrecoverable error has occured
+ *
+ * file: the filename of the source being requested
+ *
+ * local-addr: the address or domain name specified by the remote host, viz.
+ *      myserver.mydomain.org or 42.112.5.25.some.isp.net. Because different
+ *      names may resolve to the same address, this field will specifically
+ *      reflect the label that the *remote host* is using to contact your
+ *      server.
+ *
+ * action: the nature of the interaction between the local and remote hosts,
+ *      being one of the 9 HTTP methods ("verbs"), or else a response verb
+ *      emitted by the server. The action may be printed by name or in 
+ *      symbolic fashion.
+ *
+ *      HEAD    - Ask for response (metadata) without response body
+ *      GET     - Request a representation of the specified source
+ *      POST    - Submits data to be processed
+ *      PUT     - Uploads a representation of the specified resource
+ *      DELETE  - Deletes the specified resource
+ *      TRACE   - Echoes back the received request
+ *      OPTIONS - Check if the server supports a specific request
+ *      CONNECT - Converts the connection to a transparent TCP/IP tunnel
+ *      PATCH   - Apply partial modifications to a resource
+ *      
+ *      Cloth only supports the GET routine, for simplicity, and a successful
+ *      response is marked SEND. 
+ *
+ *      Alternate representations
+ *
+ *      GET     <---
+ *      SEND    --->
+ *      WARN    !---
+ *              ---!
+ *      OUCH    x--x
+ *
+ * remote-addr: similar to the local address, except for the remote host
+ *
+ * time: The time at which the request was processed by the server
+ *      Time is formatted in ISO format: yyyy-mm-dd HH:mm:ss
+ *
+ * message: An optional plaintext message, e.g. explaining an error context or
+ *      specifying the user agent of the remote host
+ *
+ * An example log snippet:
+ *
+ *      INFO index.html cloth.homeunix.org:80 <--- 22.85.117.2:34205 (2012-06-17 06:49:58) "Mozilla/5.0 (Windows; U; Windows..."
+ *      INFO index.html cloth.homeunix.org:80 ---> 22.85.117.2:34206 (2012-06-17 06:49:59)
+ *      INFO jindex.baz cloth.homeunix.org:80 <--- 22.85.117.2:31102 (2012-06-17 06:50:01) "Mozilla/5.0 (Windows; U; Windows..."
+ *      WARN jindex.baz cloth.homeunix.org:80 ---! 22.85.117.2:31102 (2012-06-17 06:50:02) "Extension type not supported"
  */
-char *mklog(char *raw, time_t time, pid_t pid)
+
+
+struct session_t {
+        int  socket;        /* File descriptor of the socket */
+        char *host;         /* Hostname the remote end wants to connect to */
+        char *agent;        /* Remote user-agent id */
+        char *resource;     /* Resource (file) being requested */
+        char *remote_addr;  /* Address of the remote host */
+        short remote_port;  /* Port of the remote host */
+};
+
+
+/** 
+ * http_info -- Parse an HTTP request and identify relevant information
+ * @request: the HTTP request buffer
+ * @entry  : the log_entry struct to be (partially) filled out
+ *
+ * Determines the following:
+ *      0. The resource being requested
+ *      1. The hostname targeted by the remote agent 
+ *      2. The remote User-Agent ID
+ *
+ */
+void http_info(struct session_t *session, char *request)
 {
-        static char copy[BUFSIZE];
-        static char date[BUFSIZE];
-        static char host[BUFSIZE];
-        static char agent[BUFSIZE];
-        static char req[BUFSIZE];
+        static char req_copy[BUFSIZE];
         char *token;
-        char *field;
-        char *dest;
+        char *buf;
 
-        dest = malloc(BUFSIZE * sizeof(char)); /* This gets returned */
+        bwipe(req_copy);
+        strcpy(req_copy, request);
 
-        strcpy(copy, raw);
-
-        /* Parse the raw buffer, fishing out the important bits */
-        for (token  = strtok(copy, "**"); 
+        /* 
+         * Search tokens are truncated before being placed in the struct.
+         * See field() in textutils.h for details.
+         */
+        for (token  = strtok(req_copy, "**"); 
              token != NULL; 
-             token  = strtok(NULL, "**")) {
+             token  = strtok(NULL, "**")) 
+        {
+                if (buf = field(token, "GET "), buf != NULL)
+                        /* e.g. 'GET /index.html' */
+                        pumpf(&session->resource, "%s", buf);
 
-                if (field = strstr(token, "GET"), field != NULL)
-                        sprintf(req, "%s", field);
+                if (buf = field(token, "Host: "), buf != NULL)
+                        /* e.g. 'Host: www.something.com' */
+                        pumpf(&session->host, "%s", buf);
 
-                if (field = strstr(token, "Host:"), field != NULL)
-                        sprintf(host, "%s", &field[6]);
-
-                if (field = strstr(token, "User-Agent:"), field != NULL)
-                        sprintf(agent, "%s", &field[12]);
+                if (buf = field(token, "User-Agent: "), buf != NULL)
+                        /* e.g. 'User-Agent: Mozilla/3.0 ...' */
+                        pumpf(&session->agent, "%s", buf);
         }
-
-        /* Print the formatted date string */
-        strftime(date, BUFSIZE, COMMON_LOG_TIME, gmtime(&time));
-
-        /* Print all of this into the dest buffer */
-        sprintf(dest, "%s %s [%s] \"%s\" %d -", host, agent, date, req, pid);
-
-        return dest;
 }
 
 
 /**
- * log -- prints server status and messages to the log file 
- * @genre: what sort of log entry (see enum log_genre) 
- * @s1   : message 1
- * @s2   : message 2
- * @num  : errorno
+ * addr_info -- fill out the remote host information in the session struct
+ * @session: pointer to a session struct
+ * @remote : pointer to a copy of the remote sockaddr_in 
  */
-void log(enum log_genre genre, char *msg, char *raw, int socket)
+void addr_info(struct session_t *session, struct sockaddr_in *remote) 
 {
-	char buf[BUFSIZE*2];
-        char *log_entry;
+        if (!remote)
+                return;
+
+        session->remote_addr = inet_ntoa(remote->sin_addr);
+        session->remote_port = ntohs(remote->sin_port);
+}
+
+
+/**
+ * session_info -- fill out the session structure
+ * @session: pointer to a session struct
+ * @socket : file descriptor of active socket
+ * @remote : sockaddr of remote client
+ * @request: HTTP request
+ */
+void session_info(struct session_t *session, int socket, struct sockaddr_in *remote, char *request)
+{
+        http_info(session, request);
+        addr_info(session, remote);
+        session->socket = socket;
+}
+
+
+
+void time_info(char *buffer, time_t time)
+{
+        #define TIME_FORMAT "%Y-%m-%d %H:%M:%S"
+        strftime(buffer, LOGBUF, TIME_FORMAT, gmtime(&time));
+}
+
+
+
+char *new_entry(struct http_status *status, struct session_t *session)
+{
+        char *timebuf;
+        char *buffer;
+
+        timebuf = malloc(LOGBUF * sizeof(char));
+        time_info(timebuf, time(NULL));
+
+        pumpf(&buffer, "%s %s %s %s:%hd (%s)",
+                session->resource,
+                session->host,
+                status->figure,
+                session->remote_addr,
+                session->remote_port,
+                timebuf);
+
+        free(timebuf);
+
+        return buffer;
+}
+
+
+void log(int code, struct session_t *session, char *msg)
+{
+        struct http_status *status;
+        char *entry;
+	char *buf;
 	int fd;
 
-        log_entry = mklog(raw, time(NULL), getpid());
+        status = &STATUS[code];
 
-	switch (genre) 
+        if (status->code != OUCH)
+                entry = new_entry(status, session);
+
+	switch (status->code) 
         {
-	case OOPS: 
-                sprintf(buf, "OOPS: %s ERRNO %d", msg, errno); 
+	case OUCH: 
+                pumpf(&buf, "OUCH: \"%s\" (%d)", msg, errno); 
                 break;
-	case WARN: 
-		sprintf(buf, "cloth says: %s\r", msg);
-		write(socket, buf, strlen(buf));
-		sprintf(buf, "WARN: %s %s", msg, log_entry); 
+        case WARN:
+                /* Write over socket */
+		pumpf(&buf, "cloth says: %hd %s\r", status->code, msg);
+		write(session->socket, buf, strlen(buf));
+                /* Write to log */
+		pumpf(&buf, "WARN: %s \"%hd\"", entry, status->http); 
 		break;
 	case INFO: 
-                sprintf(buf, "INFO: %s %s", msg, log_entry);
+                pumpf(&buf, "INFO: %s \"%s\"", entry, msg);
                 break;
 	}	
         
@@ -158,42 +293,15 @@ void log(enum log_genre genre, char *msg, char *raw, int socket)
 		close(fd);
 	}
 
-        free(log_entry);
+        if (status->code != OUCH)
+                free(entry);
 
-	if (genre == OOPS || genre == WARN) 
+        free(buf);
+        
+	if (status->code == OUCH || status->code == WARN) 
                 exit(3);
 }
 
-/**
- * procinfo -- record the process information so it can be read by watcher
- */
-void procinfo(pid_t pid, int socket, int hit, struct sockaddr_in *client)
-{
-        char buf[BUFSIZE];
-        char *ip;
-        uint16_t port;
-        int fd;
-        time_t t;
-
-        /* Convert the client address to a char string */
-        ip   = inet_ntoa(client->sin_addr);
-        /* Convert the port number to a short */ 
-        port = ntohs(client->sin_port);
-        /* Get the number of seconds since the epoch */
-        t = time(NULL);
-        
-        /*getnameinfo(client, sizeof(*client), host, hostlen, serv, servlen, 0);*/
-
-        sprintf(buf, "%lld:%d:%d:%d:%s:%hu", (long long)t, pid, socket, hit, ip, port);
-
-        /* Write the procinfo to the log file */
-	if ((fd = open(INFO_PATH, O_CREAT| O_WRONLY | O_APPEND, 0644)) >= 0) {
-		write(fd, buf, strlen(buf)); 
-		write(fd, "\n", 1);      
-		close(fd);
-	}
-}
-        
 
 /****************************************************************************** 
  * HTTP 
@@ -218,14 +326,28 @@ inline char *get_file_extension(char *buf, size_t buflen)
 }
 
 
+struct sockaddr_in *copyaddr(struct sockaddr_in *addr)
+{
+        struct sockaddr_in *new;
+
+        new = calloc(1, sizeof(struct sockaddr_in));
+
+        new->sin_family = addr->sin_family;
+        new->sin_port   = addr->sin_port;
+        new->sin_addr   = addr->sin_addr;
+
+        return new;
+}
+
 /**
  * web -- child web process that gets forked (so we can exit on error)
  * @fd : socket file descriptor 
  * @hit: request count 
  */
-void web(int fd_socket, int hit)
+void web(int fd_socket, struct sockaddr_in *remote, int hit)
 {
-	static char buffer[BUFSIZE];
+        struct session_t sess;
+	static char request[BUFSIZE];
         char *buf;
         int fd_file;
 	char *fstr;
@@ -235,50 +357,52 @@ void web(int fd_socket, int hit)
          * Receive a new request                      *
          **********************************************/
         /* Read the request from the socket into the buffer */
-	if (ret = read(fd_socket, buffer, BUFSIZE), ret <= 0 || ret >= BUFSIZE)
-		log(WARN, "failed to read browser request", "", fd_socket);
+	if (ret = read(fd_socket, request, BUFSIZE), ret <= 0 || ret >= BUFSIZE)
+		log(BAD_REQUEST, &sess, "");
 
         /* Nul-terminate the buffer. */
-	buffer[ret] = '\0'; 
+	request[ret] = '\0'; 
 
         /* Replace CR and/or NL with '*' delimiter */
-	for (buf = buffer; *buf; buf++) {
+	for (buf = request; *buf; buf++) {
 		if (*buf=='\r' || *buf=='\n') 
                         *buf = '*';
         }
 
-	log(INFO, "request", buffer, hit);
+        session_info(&sess, fd_socket, remote, request);
+
+	log(ACCEPT, &sess, "");
 
 
         /********************************************** 
          * Verify that the request is legal           *
          **********************************************/
         /* Only the GET operation is allowed */
-	if (strncmp(buffer, "GET ", 4) && strncmp(buffer, "get ", 4))
-		log(WARN, "Only GET operation supported", buffer, fd_socket);
+	if (strncmp(request, "GET ", 4) && strncmp(request, "get ", 4))
+		log(BAD_METHOD, &sess, "Only GET supported");
 
         /* Truncate the request after the filename being requested */
-        for (buf=&buffer[4]; *buf; buf++) {
+        for (buf=&request[4]; *buf; buf++) {
                 if (*buf == ' ') {*buf = '\0'; break;};
         }
 
         /* Catch any illegal relative pathnames (..) */
-        if (strstr(buffer, ".."))
-                log(WARN, "Relative paths not supported", buffer, fd_socket);
+        if (strstr(request, ".."))
+                log(BAD_REQUEST, &sess, "Relative paths not supported");
 
         /* In the absence of an explicit filename, default to index.html */
-        if (!strncmp(buffer, "GET /\0", 6) || !strncmp(buffer, "get /\0", 6))
-		strcpy(buffer, "GET /index.html");
+        if (!strncmp(request, "GET /\0", 6) || !strncmp(request, "get /\0", 6))
+		strcpy(request, "GET /index.html");
 
         /* Scan for filename extensions and check against valid ones. */
-        if (fstr = get_file_extension(buffer, strlen(buffer)), fstr == NULL)
-                log(WARN, "file extension not supported", buffer, fd_socket);
+        if (fstr = get_file_extension(request, strlen(request)), fstr == NULL)
+                log(NO_METHOD, &sess, "file extension not supported");
 
         /* Open the requested file */
-	if ((fd_file = open(&buffer[5], O_RDONLY)) == -1)
-		log(WARN, "failed to open file", &buffer[5], fd_socket);
+	if ((fd_file = open(&request[5], O_RDONLY)) == -1)
+		log(ERROR, &sess, "failed to open file");
 
-	log(INFO, "SEND", &buffer[5], hit);
+	log(RESPONSE, &sess, "");
 
 
         /********************************************** 
@@ -288,16 +412,18 @@ void web(int fd_socket, int hit)
          * Format and print the HTTP response to the buffer, then write the 
          * buffer contents to the socket.
          */ 
-	sprintf(buffer, "HTTP/1.0 200 OK\r\nContent-Type: %s\r\n\r\n", fstr);
-	write(fd_socket, buffer, strlen(buffer));
+	sprintf(request, "HTTP/1.0 200 OK\r\nContent-Type: %s\r\n\r\n", fstr);
+	write(fd_socket, request, strlen(request));
 
 	/* 
          * Write the file to the socket in blocks of 8KB (last block may 
          * be smaller) 
          */
-	while ((ret = read(fd_file, buffer, BUFSIZE)) > 0) {
-		write(fd_socket, buffer, ret);
+	while ((ret = read(fd_file, request, BUFSIZE)) > 0) {
+		write(fd_socket, request, ret);
 	}
+
+        free(remote);
 
         #ifdef LINUX
 	sleep(1);	/* to allow socket to drain */
@@ -333,10 +459,7 @@ void cloth(int port)
 	signal(SIGHUP, SIG_IGN); /* Ignore terminal hangups */
 	setpgrp();               /* Create new process group */
 
-
-	log(INFO, "cloth is starting up...", "", getpid());
-
-
+        /*log(INFO, 0, "cloth is starting up...", "", getpid());*/
 
         /**********************************************
          * Establish the server side of the socket    *
@@ -347,15 +470,15 @@ void cloth(int port)
 
 	/* Initialize the socket */
 	if ((fd_listen = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-		log(OOPS, "system call", "socket", 0);
+                log(FATAL, NULL, "socket");
 
         /* Attempt to bind the server's address to the socket */
 	if (bind(fd_listen, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-		log(OOPS, "system call", "bind", 0);
+                log(FATAL, NULL, "bind");
 
         /* Attempt to listen on the socket */
 	if (listen(fd_listen, 64) < 0)
-		log(OOPS, "system call", "listen", 0);
+                log(FATAL, NULL, "listen");
 
 
         /**********************************************
@@ -366,21 +489,20 @@ void cloth(int port)
 
                 /* Attempt to accept on socket */
 		if ((fd_socket = accept(fd_listen, (struct sockaddr *)&client_addr, &length)) < 0)
-			log(OOPS, "system call", "accept", 0);
+                        log(FATAL, NULL, "accept");
 
                 /* Fork a new process to handle the request */
 		if ((pid = fork()) < 0)
-			log(OOPS, "system call", "fork", 0);
+                        log(FATAL, NULL, "fork");
 
                 /* Child */
                 if (pid == 0) {
                         close(fd_listen);
-                        web(fd_socket, hit); /* never returns */
+                        web(fd_socket, copyaddr(&client_addr), hit); /* never returns */
                 /* Parent */
                 } else { 
                         close(fd_socket);
                 }
-                procinfo(pid, fd_socket, hit, &client_addr); 
 	}
 }
 
