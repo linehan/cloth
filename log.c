@@ -69,7 +69,8 @@ void sesinfo_http(struct ses_t *session, char *request)
                 if (clean = field(token, "GET "), clean != NULL) {
                         pumpf(&session->resource, "%s", clean);
                         while (clean[i++] != ' ')
-                                clean[i] = '\0';
+                        ;
+                        clean[--i] = '\n';
                 }
 
                 if (clean = field(token, "Host: "), clean != NULL)
