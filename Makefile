@@ -9,7 +9,7 @@ LDFLAGS=-pg
 #      gprof 
 #                                  
 
-SOURCES=cloth.c textutils.c
+SOURCES=cloth.c log.c textutils.c
 OBJECTS=$(SOURCES:.c=.o)
 
 EXECUTABLE=cloth

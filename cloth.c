@@ -9,10 +9,11 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/param.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include "textutils.h"
-#include "http_status.h"
+#include "log.h"
 
 /*
  * accept() makes use of the restrict keyword 
@@ -30,9 +31,6 @@
 
 /* Message printed on illegal argument usage. */
 #define HELP_MESSAGE "usage: cloth <PORT> <WWW-DIRECTORY>\n"
-/* Type of message to be printed in the log. */ 
-/*enum log_genre { OOPS=42, WARN, INFO };*/
-
 
 
 /*
@@ -69,12 +67,8 @@ struct ext_t supported_ext[]={
 char www_path[BUFSIZE];
 
 
-
-
-
-
 /****************************************************************************** 
- * HTTP 
+ * HELPERS 
  * The main functions called by the child process when a request is made
  * on the socket being listened to by the server.
  ******************************************************************************/
@@ -96,7 +90,10 @@ inline char *get_file_extension(char *buf, size_t buflen)
 }
 
 
-struct sockaddr_in *copyaddr(struct sockaddr_in *addr)
+/**
+ * copyaddr -- allocate and return a copy of a sockaddr_in structure
+ */
+inline struct sockaddr_in *copyaddr(struct sockaddr_in *addr)
 {
         struct sockaddr_in *new;
 
@@ -109,6 +106,12 @@ struct sockaddr_in *copyaddr(struct sockaddr_in *addr)
         return new;
 }
 
+
+/****************************************************************************** 
+ * HTTP 
+ * The main functions called by the child process when a request is made
+ * on the socket being listened to by the server.
+ ******************************************************************************/
 /**
  * web -- child web process that gets forked (so we can exit on error)
  * @fd : socket file descriptor 
@@ -116,7 +119,7 @@ struct sockaddr_in *copyaddr(struct sockaddr_in *addr)
  */
 void web(int fd_socket, struct sockaddr_in *remote, int hit)
 {
-        struct session_t sess;
+        struct ses_t session;
 	static char request[BUFSIZE];
         char *buf;
         int fd_file;
@@ -128,7 +131,7 @@ void web(int fd_socket, struct sockaddr_in *remote, int hit)
          **********************************************/
         /* Read the request from the socket into the buffer */
 	if (ret = read(fd_socket, request, BUFSIZE), ret <= 0 || ret >= BUFSIZE)
-		log(BAD_REQUEST, &sess, "");
+		log(BAD_REQUEST, &session, "");
 
         /* Nul-terminate the buffer. */
 	request[ret] = '\0'; 
@@ -139,9 +142,9 @@ void web(int fd_socket, struct sockaddr_in *remote, int hit)
                         *buf = '*';
         }
 
-        session_info(&sess, fd_socket, remote, request);
+        sesinfo(&session, fd_socket, remote, request);
 
-	log(ACCEPT, &sess, "");
+	log(ACCEPT, &session, "");
 
 
         /********************************************** 
@@ -149,7 +152,7 @@ void web(int fd_socket, struct sockaddr_in *remote, int hit)
          **********************************************/
         /* Only the GET operation is allowed */
 	if (strncmp(request, "GET ", 4) && strncmp(request, "get ", 4))
-		log(BAD_METHOD, &sess, "Only GET supported");
+		log(BAD_METHOD, &session, "Only GET supported");
 
         /* Truncate the request after the filename being requested */
         for (buf=&request[4]; *buf; buf++) {
@@ -158,7 +161,7 @@ void web(int fd_socket, struct sockaddr_in *remote, int hit)
 
         /* Catch any illegal relative pathnames (..) */
         if (strstr(request, ".."))
-                log(BAD_REQUEST, &sess, "Relative paths not supported");
+                log(BAD_REQUEST, &session, "Relative paths not supported");
 
         /* In the absence of an explicit filename, default to index.html */
         if (!strncmp(request, "GET /\0", 6) || !strncmp(request, "get /\0", 6))
@@ -166,13 +169,13 @@ void web(int fd_socket, struct sockaddr_in *remote, int hit)
 
         /* Scan for filename extensions and check against valid ones. */
         if (fstr = get_file_extension(request, strlen(request)), fstr == NULL)
-                log(NO_METHOD, &sess, "file extension not supported");
+                log(NO_METHOD, &session, "file extension not supported");
 
         /* Open the requested file */
 	if ((fd_file = open(&request[5], O_RDONLY)) == -1)
-		log(ERROR, &sess, "failed to open file");
+		log(ERROR, &session, "failed to open file");
 
-	log(RESPONSE, &sess, "");
+	log(RESPONSE, &session, "");
 
 
         /********************************************** 
@@ -196,7 +199,7 @@ void web(int fd_socket, struct sockaddr_in *remote, int hit)
         free(remote);
 
         #ifdef LINUX
-	sleep(1);	/* to allow socket to drain */
+	sleep(1); // allow socket to drain
         #endif
 	exit(1);
 }
