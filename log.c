@@ -54,6 +54,7 @@ void sesinfo_http(struct ses_t *session, char *request)
         char *copy;  // copy of HTTP request
         char *token; // tokenized substring of copy
         char *clean; // cleaned-up version of token
+        int i=0;
 
         copy = bdup(request);
 
@@ -65,8 +66,11 @@ void sesinfo_http(struct ses_t *session, char *request)
              token != NULL; 
              token  = strtok(NULL, "**")) 
         {
-                if (clean = field(token, "GET "), clean != NULL)
+                if (clean = field(token, "GET "), clean != NULL) {
                         pumpf(&session->resource, "%s", clean);
+                        while (clean[i++] != ' ')
+                                clean[i] = '\0';
+                }
 
                 if (clean = field(token, "Host: "), clean != NULL)
                         pumpf(&session->host, "%s", clean);
