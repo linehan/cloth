@@ -50,19 +50,4 @@ static struct http_status STATUS[]={
         { OUCH, HTTP_FATAL_ERROR,      "xxxx" },      /* FATAL */
 };
 
-//[> Info <]
-//static struct http_status RESPONSE    { HTTP_OK,               "--->" };
-//static struct http_status ACCEPT      { HTTP_ACCEPTED,         "<---" };
-
-//[> Warn <]
-//static struct http_status BAD_REQUEST { HTTP_BAD_REQUEST,      "x---" };
-//static struct http_status NOT_FOUND   { HTTP_NOT_FOUND,        "?---" };
-//static struct http_status BAD_METHOD  { HTTP_METHOD_FORBIDDEN, "x---" };
-//static struct http_status OVERFLOW    { HTTP_HEADER_OVERFLOW,  "+---" };
-//static struct http_status ERROR       { HTTP_SERVER_ERROR,     "---x" };
-//static struct http_status NO_METHOD   { HTTP_NO_METHOD,        "---?" };
-
-//[> Ouch <]
-//static struct http_status FATAL       { HTTP_FATAL_ERROR,      "xxxx" };
-
 #endif
