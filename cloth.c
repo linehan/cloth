@@ -117,7 +117,7 @@ inline struct sockaddr_in *copyaddr(struct sockaddr_in *addr)
  * @fd : socket file descriptor 
  * @hit: request count 
  */
-void web(int fd_socket, struct sockaddr_in *remote, int hit)
+void web(int fd_socket, struct sockaddr_in *remote, unsigned long hit)
 {
         struct ses_t session;
 	static char request[BUFSIZE];
@@ -217,7 +217,7 @@ void cloth(int port)
 	socklen_t length;
         int fd_socket;
         int fd_listen;
-        int hit;
+        unsigned long hit;
         int pid;
         int i;
 
@@ -257,7 +257,7 @@ void cloth(int port)
         /**********************************************
          * Loop forever, listening on the socket      *
          **********************************************/
-	for (hit=1; ; hit++) {
+	for (;;) {
 		length = sizeof(client_addr);
 
                 /* Attempt to accept on socket */
