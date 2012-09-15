@@ -291,7 +291,7 @@ void cloth(int port)
  */
 int main(int argc, char **argv)
 {
-        #define DEFAULT_PORT 55555
+        #define DEFAULT_PORT 1337
         #define MAX_PORT     60000
         int port;
         int ch;
